@@ -159,3 +159,28 @@ You may observe and rerun your pipeline as often as you like, but in the end you
 - [Prefect documentation](https://docs.prefect.io/v3/get-started)
 - [dbt-duckdb adapter](https://github.com/duckdb/dbt-duckdb) and [dbt data tests](https://docs.getdbt.com/docs/build/data-tests)
 - [Moto server mode](https://docs.getmoto.org/en/latest/docs/server_mode.html), [ElasticMQ](https://github.com/softwaremill/elasticmq)
+
+## DAG pipeline
+Diagram is located in docs/dag.png.
+
+## Setting and running pipeline
+Before running the pipeline, ensure that the virtual environment is activated and that the environment variables are configured correctly. Then, run python prefect-flow.py. To return the submission receipt code, run python kit/check_submission.py. Verify using python kit/check_submission.py --verify <UVAID> prefect <RECEIPTCODE>.
+
+## Polling strategy
+The selected polling strategy was one that checks SQS queue attributes every 5 seconds, with a 20-minute timeout to prevent indefinite waiting. Once no messages are delayed, the pipeline uses SQS long polling (WaitTimeSeconds=10) to receive messages in batches of up to 10, and continues until all 21 fragments are stored and visible/in_flight/delayed are all down to 0. This approach handles asynchronous message delays efficiently while reducing unnecessary requests. I rejected shorter polling because too frequent updates can be redundant and excessive.
+
+## Receive → persist → delete
+The receive -> persist -> delete order allows for the fragments to be deleted only after they are successfully entered into raw.fragments. If they take too long, then they are still available for redelivery. This order is important because if the fragment is deleted before it is saved in the database, then that fragment is lost forever. Idempotency means that it is safe to apply twice with the same result. Since it is possible that duplicates are entered in the database if fragments are not deleted properly, stg_fragments is used to remove duplicates.
+
+## Chaos round
+For the chaos round, set DP2_CHAOS=1 to enable duplicates and poison messages (no word attribute). stg_fragments already handles duplicates. On the other hand, the pipeline skips poison messages but never deletes them, so the queue never reaches 0, i.e. the run never stops. We handle this by editing the collect_messages() function, which stores the poison message and deletes it so that the queue can properly reach 0.
+
+## Tool rules
+Prefect is a workforce orchestration tool, meaning that it is used to build pipelines and automate workflows. It excels at error handling and tracking the steps in the pipeline. The dashboard can help monitor the time, duration, and success of the flows. Without this, running and monitoring the flow requires much more manual intervention.
+DBT functions as a gate that transforms and validates data quality. When the fragments land, four data tests are run, and the assembled_phrase mart produces the final phrase. Without this, data transformation and quality check would require a separate process.
+DuckDB is a SQL database management system, meaning that it is used to store data in SQL formatting. It stores the fragments in raw.fragments when they have landed. It also stores the final assembled phrases in main.assembled_phrase. Without this, a different storage system must be set up since there would be no local storage space.
+
+## Results shown
+Full-delay run dashboard/dbt output screenshots are located in docs/1.png.
+Chaos run dbt output screenshots for before/after fixes are located in docs/2.png.
+Valid receipt code: 5C242E4A56
